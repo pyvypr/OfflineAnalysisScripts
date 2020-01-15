@@ -1,0 +1,5 @@
+{
+  "verdict_server_url" : "http://localhost:9002/",
+  "monitored_service" : "../local_test",
+  "vypr_path" : "../local_test"
+}
