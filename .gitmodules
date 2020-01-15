@@ -1,0 +1,3 @@
+[submodule "VyPRAnalysis"]
+	path = VyPRAnalysis
+	url = git@github.com:pyvypr/VyPRAnalysis-py3.git
