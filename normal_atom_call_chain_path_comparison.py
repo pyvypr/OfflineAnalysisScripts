@@ -7,7 +7,10 @@ We then compare the paths taken by the function calls lower down in the call dow
 that resulted in failure vs observations that resulted in success.
 
 This gives us an indication of whether paths taken through functions that are called during observations
-may be responsible for an observation violating a constraint."""
+may be responsible for an observation violating a constraint.
+
+We construct a map instrumentation point -> verdict -> function -> {call paths}, using which we can compare paths from
+the same function for a fixed instrumentation point and verdict."""
 import sys
 import pprint
 
@@ -33,12 +36,12 @@ if __name__ == "__main__":
         print("Function '%s' with property %s:" % (function.fully_qualified_name, function.property))
         # construct this function's SCFG - we need this for path reconstruction
         # note, for path comparison we will need to use the same SCFG (wih the same address in memory) throughout
-        if not(function.id in function_id_to_scfg):
+        if not (function.id in function_id_to_scfg):
             scfg = function.get_scfg()
             function_id_to_scfg[function.id] = scfg
         else:
             scfg = function_id_to_scfg[function.id]
-        #VyPRAnalysis.utils.write_scfg(scfg, 'gvs/%s-scfg.gv' % function.fully_qualified_name)
+        # VyPRAnalysis.utils.write_scfg(scfg, 'gvs/%s-scfg.gv' % function.fully_qualified_name)
         # we care about instrumentation points that generated observations that caused a verdict to be reached
         # we construct a map from instrumentation points IDs to a set of observations causing failure
         # and a set of observations causing success.
@@ -75,16 +78,16 @@ if __name__ == "__main__":
                         else:
                             instrumentation_point_id_map[inst_point_id][verdict.verdict] = [observation]
                     else:
-                        instrumentation_point_id_map[inst_point_id] = {verdict.verdict : [observation]}
+                        instrumentation_point_id_map[inst_point_id] = {verdict.verdict: [observation]}
 
         print("Map from instrumentation point IDs to verdicts to observations for collapsing atoms")
         print(instrumentation_point_id_map)
 
-        # iterate through the map we just created
+        # expand the structure we just created to map from observations to callees occurring during those observations
         for inst_point_id in instrumentation_point_id_map:
-            satisfying_callees = []
-            violating_callees = []
             for verdict_value in instrumentation_point_id_map[inst_point_id]:
+                # we only care about the paths taken by a function, not with respect to observations
+                function_id_map = {}
                 for obs in instrumentation_point_id_map[inst_point_id][verdict_value]:
                     # get the transition of which this observation is a member
                     verdict = VyPRAnalysis.verdict(id=obs.verdict)
@@ -97,77 +100,49 @@ if __name__ == "__main__":
                     # filter the callees to those that occurred during obs
                     callees = list(
                         filter(
-                            lambda callee : obs.observation_time < callee.time_of_call < obs.observation_end_time,
+                            lambda callee: obs.observation_time < callee.time_of_call < obs.observation_end_time,
                             callees
                         )
                     )
                     print("Function calls occurring during observation %s" % obs)
                     print("\tare %s" % callees)
-                    # we need to get the function associated with each callee
-                    callees = list(
-                        map(
-                            lambda callee : (callee, VyPRAnalysis.function(id=callee.function)),
-                            callees
+                    for callee in callees:
+                        callee_function = VyPRAnalysis.function(id=callee.function)
+                        if function_id_map.get(callee.function):
+                            callee_function_scfg = function_id_to_scfg[callee.function]
+                            path = callee.reconstruct_path(callee_function_scfg)
+                            function_id_map[callee.function].append(path)
+                        else:
+                            if function_id_to_scfg.get(callee.function):
+                                callee_function_scfg = function_id_to_scfg[callee.function]
+                            else:
+                                callee_function_scfg = callee_function.get_scfg()
+                                function_id_to_scfg[callee.function] = callee_function_scfg
+                            path = callee.reconstruct_path(callee_function_scfg)
+                            function_id_map[callee.function] = [path]
+
+                # reassign this part of instrumentation_point_id_map with a dictionary
+                instrumentation_point_id_map[inst_point_id][verdict_value] = function_id_map
+
+            print("expanded map:")
+            pprint.pprint(instrumentation_point_id_map)
+
+            # now, for this function/property pair, for each instrumentation point we compare paths taken
+            # through each function that we found
+            for inst_point_id in instrumentation_point_id_map:
+                for verdict_value in instrumentation_point_id_map[inst_point_id]:
+                    for function_id in instrumentation_point_id_map[inst_point_id][verdict_value]:
+                        paths = instrumentation_point_id_map[inst_point_id][verdict_value][function_id]
+                        relevant_scfg = function_id_to_scfg[function_id]
+                        grammar = relevant_scfg.derive_grammar()
+                        parse_tree = ParseTree(paths[0], grammar, relevant_scfg.starting_vertices)
+                        # intersect with the other paths
+                        other_parse_trees = list(
+                            map(
+                                lambda path: ParseTree(path, grammar, relevant_scfg.starting_vertices),
+                                paths[1:]
+                            )
                         )
-                    )
-                    # put the callees associated with the observation
-                    if verdict_value == 1:
-                        satisfying_callees += callees
-                    else:
-                        violating_callees += callees
-
-            function_verdict_path_map = {}
-
-            # reconstruct the paths taken by each callee that was linked to a satisfying and violating observation
-            for (satisfying_callee, callee_function) in satisfying_callees:
-                if not (callee_function.id in function_id_to_scfg):
-                    callee_function_scfg = callee_function.get_scfg()
-                    function_id_to_scfg[callee_function.id] = scfg
-                else:
-                    callee_function_scfg = function_id_to_scfg[callee_function.id]
-                path_taken = satisfying_callee.reconstruct_path(callee_function_scfg)
-                if function_verdict_path_map.get(callee_function.id):
-                    if function_verdict_path_map[callee_function.id].get(1):
-                        function_verdict_path_map[callee_function.id][1].append(path_taken)
-                    else:
-                        function_verdict_path_map[callee_function.id][1] = [path_taken]
-                else:
-                    function_verdict_path_map[callee_function.id] = {1 : [path_taken]}
-
-            for (violating_callee, callee_function) in violating_callees:
-                if not (callee_function.id in function_id_to_scfg):
-                    callee_function_scfg = callee_function.get_scfg()
-                    function_id_to_scfg[callee_function.id] = scfg
-                else:
-                    callee_function_scfg = function_id_to_scfg[callee_function.id]
-                path_taken = violating_callee.reconstruct_path(callee_function_scfg)
-                if function_verdict_path_map.get(callee_function.id):
-                    if function_verdict_path_map[callee_function.id].get(0):
-                        function_verdict_path_map[callee_function.id][0].append(path_taken)
-                    else:
-                        function_verdict_path_map[callee_function.id][0] = [path_taken]
-                else:
-                    function_verdict_path_map[callee_function.id] = {0 : [path_taken]}
-
-            print("Map from function IDs to verdicts, then to lists of edges")
-            pprint.pprint(function_verdict_path_map)
-
-            # for each function and verdict (generated by the observations we used at first)
-            # intersect the set of paths
-            for function_id in function_verdict_path_map:
-                for verdict_value in function_verdict_path_map[function_id]:
-                    paths = function_verdict_path_map[function_id][verdict_value]
-                    # perform the intersection
-                    relevant_scfg = function_id_to_scfg[function_id]
-                    grammar = relevant_scfg.derive_grammar()
-                    parse_tree = ParseTree(paths[0], grammar, relevant_scfg.starting_vertices)
-                    parse_tree.write_to_file("gvs/%i-parse-tree.gv" % function_id)
-                    # intersect with the other paths
-                    other_parse_trees = list(
-                        map(
-                            lambda path : ParseTree(path, grammar, relevant_scfg.starting_vertices),
-                            paths[1:]
-                        )
-                    )
-                    intersection_parse_tree = parse_tree.intersect(other_parse_trees)
-                    intersection_parse_tree.write_to_file("gvs/%i-intersection-parse-tree.gv" % function_id)
+                        intersection_parse_tree = parse_tree.intersect(other_parse_trees)
+                        intersection_parse_tree.write_to_file("gvs/inst-%i-v-%i-f%i-intersection-parse-tree.gv" %
+                                                              (function_id, verdict_value, function_id))
