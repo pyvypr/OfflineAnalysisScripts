@@ -28,12 +28,10 @@ import VyPRAnalysis.utils
 from VyPR.SCFG.parse_tree import ParseTree
 
 if __name__ == "__main__":
-    print("Start of analysis script")
     VyPRAnalysis.set_server("http://localhost:9002/")
     functions = VyPRAnalysis.list_functions()
     function_id_to_scfg = {}
     for function in functions:
-        print("Function '%s' with property %s:" % (function.fully_qualified_name, function.property))
         # construct this function's SCFG - we need this for path reconstruction
         # note, for path comparison we will need to use the same SCFG (wih the same address in memory) throughout
         if not (function.id in function_id_to_scfg):
@@ -49,14 +47,11 @@ if __name__ == "__main__":
         calls = function.get_calls()
         for call in calls:
             transaction = VyPRAnalysis.transaction(id=call.trans)
-            print("Call starting at %s and ending at %s during transaction %s" %
-                  (call.time_of_call, call.end_time_of_call, transaction))
 
             # get the verdicts during this call for the property
             verdicts = call.get_verdicts()
 
             for verdict in verdicts:
-                print("Processing verdict %s" % verdict)
                 collapsing_atom_index = verdict.collapsing_atom
                 collapsing_atom_sub_index = verdict.collapsing_atom_sub_index
                 # check that the atom that caused collapse is a normal atom, and not mixed
@@ -70,7 +65,6 @@ if __name__ == "__main__":
                             verdict.get_observations()
                         )
                     )[0]
-                    print("\tCollapsing observation was %s" % observation)
                     inst_point_id = observation.instrumentation_point
                     if instrumentation_point_id_map.get(inst_point_id):
                         if instrumentation_point_id_map[inst_point_id].get(verdict.verdict):
@@ -79,9 +73,6 @@ if __name__ == "__main__":
                             instrumentation_point_id_map[inst_point_id][verdict.verdict] = [observation]
                     else:
                         instrumentation_point_id_map[inst_point_id] = {verdict.verdict: [observation]}
-
-        print("Map from instrumentation point IDs to verdicts to observations for collapsing atoms")
-        print(instrumentation_point_id_map)
 
         # expand the structure we just created to map from observations to callees occurring during those observations
         for inst_point_id in instrumentation_point_id_map:
@@ -104,8 +95,6 @@ if __name__ == "__main__":
                             callees
                         )
                     )
-                    print("Function calls occurring during observation %s" % obs)
-                    print("\tare %s" % callees)
                     for callee in callees:
                         callee_function = VyPRAnalysis.function(id=callee.function)
                         if function_id_map.get(callee.function):
@@ -123,9 +112,6 @@ if __name__ == "__main__":
 
                 # reassign this part of instrumentation_point_id_map with a dictionary
                 instrumentation_point_id_map[inst_point_id][verdict_value] = function_id_map
-
-            print("expanded map:")
-            pprint.pprint(instrumentation_point_id_map)
 
             # now, for this function/property pair, for each instrumentation point we compare paths taken
             # through each function that we found
@@ -146,3 +132,6 @@ if __name__ == "__main__":
                         intersection_parse_tree = parse_tree.intersect(other_parse_trees)
                         intersection_parse_tree.write_to_file("gvs/inst-%i-v-%i-f%i-intersection-parse-tree.gv" %
                                                               (function_id, verdict_value, function_id))
+
+            print("For function/property pair %s" % function)
+            pprint.pprint(instrumentation_point_id_map)
