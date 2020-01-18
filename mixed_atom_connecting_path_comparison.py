@@ -18,6 +18,7 @@ VyPRAnalysis.set_config_file()
 if __name__ == "__main__":
     functions = VyPRAnalysis.list_functions()
     for function in functions:
+        print("Processing function %s" % function)
         # construct the SCFG to be used in path comparison
         function_scfg = function.get_scfg()
         # derive the context-free grammar to be used in path comparison
@@ -42,30 +43,52 @@ if __name__ == "__main__":
                         )
                     )
                     # sort by atom sub index
-                    observations = sorted(observations, key=lambda observation : observation.sub_index)
+                    observations = sorted(observations, key=lambda observation : observation.observation_time)
+
+                    # compute the path between the observations
+                    early_path = observations[0].reconstruct_reaching_path(function_scfg)
+                    late_path = observations[1].reconstruct_reaching_path(function_scfg)
+                    # compute the difference
+                    difference_path = late_path[len(early_path):]
+
                     # we will have 2 observations, so extract the pair of instrumentation points
                     # our goal is to construct a map from instrumentation point pairs to observation pairs
                     instrumentation_point_pair = (observations[0].instrumentation_point,
                                                   observations[1].instrumentation_point)
-                    observation_pair = (observations[0], observations[1])
+
+                    # compute the path between the two observations
 
                     if instrumentation_point_pair_map.get(instrumentation_point_pair):
-                        instrumentation_point_pair_map[instrumentation_point_pair].append(observation_pair)
+                        if instrumentation_point_pair_map[instrumentation_point_pair].get(verdict.verdict):
+                            instrumentation_point_pair_map[instrumentation_point_pair][verdict.verdict]\
+                                .append(difference_path)
+                        else:
+                            instrumentation_point_pair_map[instrumentation_point_pair][verdict.verdict]\
+                                = [difference_path]
                     else:
-                        instrumentation_point_pair_map[instrumentation_point_pair] = [observation_pair]
+                        instrumentation_point_pair_map[instrumentation_point_pair]\
+                            = {verdict.verdict : [difference_path]}
 
-        # for each pair of instrumentation points, iterate through the pairs of observations and, for each of those,
-        # compute the path between them
+        # iterate through the map from instrumentation point pairs to verdicts to difference paths
+        # and compute the intersections of the difference paths for each verdict
         for instrumentation_point_pair in instrumentation_point_pair_map:
-            for obs_pair in instrumentation_point_pair_map[instrumentation_point_pair]:
-                # order the observations by time - the path between them only makes sense if it goes forwards
-                # in time
-                observations = sorted(list(obs_pair), key=lambda obs : obs.observation_time)
-                early_path = observations[0].reconstruct_reaching_path(function_scfg)
-                late_path = observations[1].reconstruct_reaching_path(function_scfg)
-                # compute the difference
-                difference_path = late_path[len(early_path):]
-                # compute the parse tree of this difference
-                difference_parse_tree = ParseTree(difference_path, grammar, difference_path[0]._source_state)
-                difference_parse_tree.write_to_file("gvs/%i-%i-path-between-parse-tree.gv" %
-                                                    (observations[0].id, observations[1].id))
+            for verdict in instrumentation_point_pair_map[instrumentation_point_pair]:
+                # replace the list of difference paths with a single parametric path
+                # for this, we need to compute the intersection parse tree of all the parse trees,
+                # and then read off its leaves
+                paths = instrumentation_point_pair_map[instrumentation_point_pair][verdict]
+                first_parse_tree = ParseTree(paths[0], grammar, paths[0][0]._source_state)
+                other_parse_trees = list(
+                    map(
+                        lambda path: ParseTree(path, grammar, path[0]._source_state),
+                        paths[1:]
+                    )
+                )
+                intersection = first_parse_tree.intersect(other_parse_trees)
+                intersection.write_to_file("gvs/inst-pair-%i-%i-intersection.gv" %
+                                           instrumentation_point_pair)
+                parametric_path = intersection.read_leaves()
+                # replace the list of paths with the intersection
+                instrumentation_point_pair_map[instrumentation_point_pair][verdict] = parametric_path
+
+        pprint.pprint(instrumentation_point_pair_map)
