@@ -20,6 +20,8 @@ if __name__ == "__main__":
     for function in functions:
         # construct the SCFG to be used in path comparison
         function_scfg = function.get_scfg()
+        # derive the context-free grammar to be used in path comparison
+        grammar = function_scfg.derive_grammar()
         VyPRAnalysis.utils.write_scfg(function_scfg, 'gvs/%s-scfg.gv' % function.fully_qualified_name)
         calls = function.get_calls()
         # construct a map from pairs of instrumentation points to pairs of observations
@@ -59,9 +61,11 @@ if __name__ == "__main__":
                 # order the observations by time - the path between them only makes sense if it goes forwards
                 # in time
                 observations = sorted(list(obs_pair), key=lambda obs : obs.observation_time)
-                for obs in observations:
-                    path = obs.reconstruct_reaching_path(function_scfg)
-                    # compute the parse tree
-                    grammar = function_scfg.derive_grammar()
-                    parse_tree = ParseTree(path, grammar, function_scfg.starting_vertices)
-                    parse_tree.write_to_file("gvs/obs-id-%i-parse-tree.gv" % obs.id)
+                early_path = observations[0].reconstruct_reaching_path(function_scfg)
+                late_path = observations[1].reconstruct_reaching_path(function_scfg)
+                # compute the difference
+                difference_path = late_path[len(early_path):]
+                # compute the parse tree of this difference
+                difference_parse_tree = ParseTree(difference_path, grammar, difference_path[0]._source_state)
+                difference_parse_tree.write_to_file("gvs/%i-%i-path-between-parse-tree.gv" %
+                                                    (observations[0].id, observations[1].id))
